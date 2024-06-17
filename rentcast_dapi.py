@@ -4,7 +4,8 @@ import numpy as np
 import datetime
 import copy
 import requests
-import json
+import sqlite3
+import os
 
 
 class RentCastData():
@@ -29,22 +30,39 @@ class RentCastData():
         self.querystring = {}
         self.data_raw = None
         self.data_processed = None
+        self.offset_lim = offset_lim
 
         # Add input args to address string
-        if address is not None:
+        address_check = address is not None
+        if address_check:
             self.querystring['address'] = address
-        if city is not None:
+
+        city_check = city is not None
+        if city_check:
             self.querystring['city'] = city
-        if state is not None:
-            self.querystring['state'] = state
-        if zip is not None:
+
+        state_check = state is not None
+        if state_check:
+            self.querystring['state'] = state.upper()
+
+        zip_check = zip is not None
+        if zip_check:
             self.querystring['zip'] = zip
-        if limit is not None:
-            self.querystring['limit'] = limit
+
+        self.querystring['limit'] = limit
+
+        # If query information was given, get response. Otherwise read db
+        if address_check or city_check or state_check or zip_check:
+            self.get_response()
+            self.process_data()
+
+    def get_response(self):
+
+        limit = self.querystring['limit']
 
         # Loop through offsets
         querystring = copy.deepcopy(self.querystring)
-        offsets = np.arange(0, offset_lim, 1)
+        offsets = np.arange(0, self.offset_lim, 1)
         for offset in offsets:
             querystring['offset'] = limit * offset
 
@@ -68,9 +86,6 @@ class RentCastData():
 
             # Add data to existing data
             self.data_raw = pd.concat([self.data_raw, df_response], ignore_index=True)
-
-        # Add processed metrics
-        self.add_metrics()
 
     def parse_response(self, listings):
 
@@ -120,7 +135,7 @@ class RentCastData():
         
         return total_months
 
-    def add_metrics(self):
+    def process_data(self):
         """Add metrics of interest to the dataset"""
 
         df = copy.deepcopy(self.data_raw)
@@ -160,3 +175,70 @@ class RentCastData():
             df.loc[index, 'datetime'] = dt
 
         return df
+    
+    def save_to_db(self, db_path, table_name=None):
+        """
+        Save a pandas DataFrame to an SQLite database.
+
+        Parameters:
+            db_path (str): The name of the SQLite database file.
+            table_name (str): The name of the table to store the data in.
+
+        Returns:
+            None
+        """
+        # Ensure the database name ends with .db
+        if not db_path.endswith('.db'):
+            db_path += '.db'
+
+        # Ensure directory exists
+        db_folderpath = os.path.dirname(db_path)
+        if not os.path.exists(db_folderpath):
+            os.makedirs(db_folderpath)
+        
+        # Create a connection to the SQLite database
+        conn = sqlite3.connect(db_path)
+
+        # Set table name
+        if table_name is None:
+
+            city = self.querystring['city']
+
+            if city is None:
+                raise ValueError("No table name for database given")
+
+            table_name = city
+        
+        # Save the DataFrame to the SQLite database
+        self.data_raw.to_sql(table_name, conn, if_exists='replace', index=False)
+        
+        # Close the connection
+        conn.close()
+
+    @classmethod
+    def open_db(cls, db_path, table_name):
+        """
+        Open an SQLite database and return the connection object.
+
+        Parameters:
+            db_name (str): The name of the SQLite database file.
+
+        Returns:
+            sqlite3.Connection: The connection object to the SQLite database.
+        """
+        # Ensure the database name ends with .db
+        if not db_path.endswith('.db'):
+            db_path += '.db'
+        
+        # Create a connection to the SQLite database
+        conn = sqlite3.connect(db_path)
+
+        # Read data from the specified table
+        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+        conn.close()
+
+        rentcast_class = cls()
+        rentcast_class.data_raw = df
+        rentcast_class.process_data()
+        
+        return rentcast_class
