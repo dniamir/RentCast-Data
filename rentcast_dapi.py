@@ -165,52 +165,58 @@ class RentCastData():
     def parse_sale_date2(self, df):
         """Parse last sale date into more readable terms"""
 
+        t0 = '1965-01-01T00:00:00.000Z'
+
         # Get duration in months
         df.sort_values('lastSaleDate', inplace=True)
-        t0 = datetime.datetime.strptime(df['lastSaleDate'].values[0], '%Y-%m-%dT%H:%M:%S.%fZ')
+        # t0 = datetime.datetime.strptime(df['lastSaleDate'].values[0], '%Y-%m-%dT%H:%M:%S.%fZ')
+        t0 = datetime.datetime.strptime(t0, '%Y-%m-%dT%H:%M:%S.%fZ')
         for index, row in df.iterrows():
             dt = datetime.datetime.strptime(row['lastSaleDate'], '%Y-%m-%dT%H:%M:%S.%fZ')
+            df.loc[index, 'month'] = dt.strftime('%m')
             df.loc[index, 'months'] = self._months_between(dt, t0)
             df.loc[index, 'month-year'] = dt.strftime('%m-%Y')
             df.loc[index, 'datetime'] = dt
 
         return df
     
-    def save_to_db(self, db_path, table_name=None):
+    def save_to_db(self, db_folder, table_name=None):
         """
         Save a pandas DataFrame to an SQLite database.
 
         Parameters:
-            db_path (str): The name of the SQLite database file.
+            db_folder (str): The name of the SQLite database folder.
             table_name (str): The name of the table to store the data in.
 
         Returns:
             None
         """
-        # Ensure the database name ends with .db
-        if not db_path.endswith('.db'):
-            db_path += '.db'
-
-        # Ensure directory exists
-        db_folderpath = os.path.dirname(db_path)
-        if not os.path.exists(db_folderpath):
-            os.makedirs(db_folderpath)
-        
-        # Create a connection to the SQLite database
-        conn = sqlite3.connect(db_path)
+        state = self.querystring['state']
+        db_folder = os.path.join(db_folder, state.upper())
 
         # Set table name
         if table_name is None:
 
             city = self.querystring['city']
-            state = self.querystring['state']
 
             if city is None or state is None:
                 raise ValueError("No table name for database given")
 
-            table_name = city + state
+            table_name = city + '_' + state
             table_name = table_name.replace(' ', '_')
             table_name = table_name.lower()
+
+        # Ensure the database name ends with .db
+        if not db_folder.endswith('.db'):
+            db_folder += '.db'
+
+        # Ensure directory exists
+        db_folderpath = os.path.dirname(db_folder)
+        if not os.path.exists(db_folderpath):
+            os.makedirs(db_folderpath)
+        
+        # Create a connection to the SQLite database
+        conn = sqlite3.connect(db_folder)
         
         # Save the DataFrame to the SQLite database
         self.data_raw.to_sql(table_name, conn, if_exists='replace', index=False)
@@ -219,7 +225,7 @@ class RentCastData():
         conn.close()
 
     @classmethod
-    def open_db(cls, db_path, city, state):
+    def open_db(cls, db_folder, city, state):
         """
         Open an SQLite database and return the connection object.
 
@@ -229,21 +235,25 @@ class RentCastData():
         Returns:
             sqlite3.Connection: The connection object to the SQLite database.
         """
+        db_folder = os.path.join(db_folder, state.upper())
+
         # Ensure the database name ends with .db
-        if not db_path.endswith('.db'):
-            db_path += '.db'
+        if not db_folder.endswith('.db'):
+            db_folder += '.db'
         
         # Create a connection to the SQLite database
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_folder)
 
         # Read data from the specified table
-        table_name = city + state
+        table_name = city + '_' + state
         table_name = table_name.replace(' ', '_')
         table_name = table_name.lower()
         df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
         conn.close()
 
         rentcast_class = cls()
+        rentcast_class.querystring['state'] = state
+        rentcast_class.querystring['city'] = city
         rentcast_class.data_raw = df
         rentcast_class.process_data()
         
