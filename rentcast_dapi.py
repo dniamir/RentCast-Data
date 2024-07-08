@@ -74,7 +74,7 @@ class RentCastData():
 
             # Check that a response was given
             if not len(listings):
-                print("No more listings at offset %i for limit %i" % (offset, limit))
+                print("No more listings at offset %i with limit %i" % (offset, limit))
                 break
 
             df_response = self.parse_response(listings)
@@ -121,7 +121,7 @@ class RentCastData():
 
         return date.replace(year=target_year, month=target_month, day=day)
 
-    def __months_between(self, date1, date2):
+    def _months_between(self, date1, date2):
         # Ensure date1 is earlier than date2
         if date1 > date2:
             date1, date2 = date2, date1
@@ -170,7 +170,7 @@ class RentCastData():
         t0 = datetime.datetime.strptime(df['lastSaleDate'].values[0], '%Y-%m-%dT%H:%M:%S.%fZ')
         for index, row in df.iterrows():
             dt = datetime.datetime.strptime(row['lastSaleDate'], '%Y-%m-%dT%H:%M:%S.%fZ')
-            df.loc[index, 'months'] = self.__months_between(dt, t0)
+            df.loc[index, 'months'] = self._months_between(dt, t0)
             df.loc[index, 'month-year'] = dt.strftime('%m-%Y')
             df.loc[index, 'datetime'] = dt
 
@@ -203,11 +203,14 @@ class RentCastData():
         if table_name is None:
 
             city = self.querystring['city']
+            state = self.querystring['state']
 
-            if city is None:
+            if city is None or state is None:
                 raise ValueError("No table name for database given")
 
-            table_name = city
+            table_name = city + state
+            table_name = table_name.replace(' ', '_')
+            table_name = table_name.lower()
         
         # Save the DataFrame to the SQLite database
         self.data_raw.to_sql(table_name, conn, if_exists='replace', index=False)
@@ -216,7 +219,7 @@ class RentCastData():
         conn.close()
 
     @classmethod
-    def open_db(cls, db_path, table_name):
+    def open_db(cls, db_path, city, state):
         """
         Open an SQLite database and return the connection object.
 
@@ -234,6 +237,9 @@ class RentCastData():
         conn = sqlite3.connect(db_path)
 
         # Read data from the specified table
+        table_name = city + state
+        table_name = table_name.replace(' ', '_')
+        table_name = table_name.lower()
         df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
         conn.close()
 
