@@ -6,11 +6,12 @@ import copy
 import requests
 import sqlite3
 import os
-
+from sqlalchemy import JSON
+import json
 
 class RentCastData():
 
-    URL = 'https://api.rentcast.io/v1/properties'
+    URL = "https://api.rentcast.io/v1/properties"
     HEADERS = ['id', 'addressLine1', 'addressLine2', 'city', 'state', 
                 'zipCode', 'county', 'latitude', 'longitude', 'squareFootage', 
                 'lotSize', 'yearBuilt', 'lastSaleDate', 'lastSalePrice', 
@@ -23,6 +24,8 @@ class RentCastData():
                  zip=None, 
                  limit=500, 
                  offset_lim=1000,
+                 start_date=None,
+                 status='Inactive',
                  api_key=''):
         
         # Initalizations
@@ -31,6 +34,12 @@ class RentCastData():
         self.data_raw = None
         self.data_processed = None
         self.offset_lim = offset_lim
+
+        # Sale range - calculate days ago since this date
+        if start_date is not None:
+            today = datetime.date.today()
+            sale_range = (today - start_date).days
+            self.querystring['saleDateRange'] = sale_range      
 
         # Add input args to address string
         address_check = address is not None
@@ -54,7 +63,6 @@ class RentCastData():
         # If query information was given, get response. Otherwise read db
         if address_check or city_check or state_check or zip_check:
             self.get_response()
-            self.process_data()
 
     def get_response(self):
 
@@ -67,6 +75,7 @@ class RentCastData():
             querystring['offset'] = limit * offset
 
             # Get query
+            print(querystring)
             response = requests.get(self.URL, 
                                     headers=self.headers, 
                                     params=querystring)
@@ -98,18 +107,125 @@ class RentCastData():
             listing_temp = copy.deepcopy(listing)
 
             for header in listing_temp:
-                if header not in self.HEADERS:
-                    del listing[header]
-                else:
-                    listing[header] = [listing[header]]
+                # if header not in self.HEADERS:
+                #     del listing[header]
+                # else:
+                listing[header] = [listing[header]]
 
             df = pd.DataFrame.from_dict(listing)
             df_all = pd.concat([df_all, df], ignore_index=True)
 
         return df_all
+    
+    def save_to_db(self, db_path, table_name=None):
+        """
+        Save a pandas DataFrame to an SQLite database.
 
+        Parameters:
+            db_path (str): The name of the SQLite database file.
+            table_name (str): The name of the table to store the data in.
+
+        Returns:
+            None
+        """
+        # Fix dicts in dataframes
+        df = self.fix_dect_cols(self.data_raw)
+
+        # Ensure the database name ends with .db
+        if not db_path.endswith('.db'):
+            db_path += '.db'
+
+        # Ensure directory exists
+        db_folderpath = os.path.dirname(db_path)
+        if not os.path.exists(db_folderpath):
+            os.makedirs(db_folderpath)
+        
+        # Create a connection to the SQLite database
+        conn = sqlite3.connect(db_path)
+
+        # Set table name
+        if table_name is None:
+
+            city = self.querystring['city']
+            state = self.querystring['state']
+
+            if city is None or state is None:
+                raise ValueError("No table name for database given")
+
+            table_name = city + '_' +state
+            table_name = table_name.replace(' ', '_')
+            table_name = table_name.lower()
+        
+        # Save the DataFrame to the SQLite database
+        df.to_sql(table_name, conn, if_exists='replace', index=False, method='multi')
+        
+        # Close the connection
+        conn.close()
+
+    def fix_dect_cols(self, df):
+        df_copy = copy.deepcopy(df)
+        # Find columns with dict/list values
+        dict_cols = [col for col in df_copy.columns 
+                    if df_copy[col].apply(lambda x: isinstance(x, (dict, list))).any()]
+
+        # Convert those columns to JSON strings
+        for col in dict_cols:
+            df_copy[col] = df_copy[col].apply(
+                lambda x: json.dumps(x, default=str, allow_nan=False) 
+                        if isinstance(x, (dict, list)) else x
+            )
+        
+        return df_copy
+    
+
+class RentCastPlotter():
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def open_db(cls, db_path, city, state):
+        """
+        Open an SQLite database and return the connection object.
+
+        Parameters:
+            db_name (str): The name of the SQLite database file.
+
+        Returns:
+            sqlite3.Connection: The connection object to the SQLite database.
+        """
+        # Ensure the database name ends with .db
+        if not db_path.endswith('.db'):
+            db_path += '.db'
+        
+        # Create a connection to the SQLite database
+        conn = sqlite3.connect(db_path)
+
+        # Read data from the specified table
+        table_name = city + '_' +  state
+        table_name = table_name.replace(' ', '_')
+        table_name = table_name.lower()
+        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+        conn.close()
+
+        rentcast_class = cls()
+        rentcast_class.data_raw = df
+        rentcast_class.process_data()
+        
+        return rentcast_class
+    
     def add_months(self, date, months):
         # Calculate the target month and year
+        """
+        Add the specified number of months to the given date.
+
+        Parameters:
+            date (datetime.date): The date to modify.
+            months (int): The number of months to add.
+
+        Returns:
+            datetime.date: The modified date.
+        """
         target_month = date.month + months
         target_year = date.year + (target_month - 1) // 12
         target_month = (target_month - 1) % 12 + 1
@@ -123,6 +239,16 @@ class RentCastData():
 
     def _months_between(self, date1, date2):
         # Ensure date1 is earlier than date2
+        """
+        Calculate the number of months between two dates.
+
+        Parameters:
+            date1 (datetime.date): The earlier date.
+            date2 (datetime.date): The later date.
+
+        Returns:
+            int: The number of months between date1 and date2.
+        """
         if date1 > date2:
             date1, date2 = date2, date1
         
@@ -154,19 +280,6 @@ class RentCastData():
 
         # Get duration in months
         df.sort_values('lastSaleDate', inplace=True)
-        for index, row in df.iterrows():
-            dt = datetime.datetime.strptime(row['lastSaleDate'], '%Y-%m-%dT%H:%M:%S.%fZ')
-            df.loc[index, 'month'] = dt.strftime('%m')
-            df.loc[index, 'year'] = dt.strftime('%Y')
-            df.loc[index, 'datetime'] = dt
-        
-        return df
-
-    def parse_sale_date2(self, df):
-        """Parse last sale date into more readable terms"""
-
-        # Get duration in months
-        df.sort_values('lastSaleDate', inplace=True)
         t0 = datetime.datetime.strptime(df['lastSaleDate'].values[0], '%Y-%m-%dT%H:%M:%S.%fZ')
         for index, row in df.iterrows():
             dt = datetime.datetime.strptime(row['lastSaleDate'], '%Y-%m-%dT%H:%M:%S.%fZ')
@@ -175,76 +288,9 @@ class RentCastData():
             df.loc[index, 'datetime'] = dt
 
         return df
-    
-    def save_to_db(self, db_path, table_name=None):
-        """
-        Save a pandas DataFrame to an SQLite database.
 
-        Parameters:
-            db_path (str): The name of the SQLite database file.
-            table_name (str): The name of the table to store the data in.
+    # @classmethod
+    # def retrun_all_cities(cls, dp_path):
+    #     """Return a list of all unique cities in the dataset"""
 
-        Returns:
-            None
-        """
-        # Ensure the database name ends with .db
-        if not db_path.endswith('.db'):
-            db_path += '.db'
-
-        # Ensure directory exists
-        db_folderpath = os.path.dirname(db_path)
-        if not os.path.exists(db_folderpath):
-            os.makedirs(db_folderpath)
-        
-        # Create a connection to the SQLite database
-        conn = sqlite3.connect(db_path)
-
-        # Set table name
-        if table_name is None:
-
-            city = self.querystring['city']
-            state = self.querystring['state']
-
-            if city is None or state is None:
-                raise ValueError("No table name for database given")
-
-            table_name = city + state
-            table_name = table_name.replace(' ', '_')
-            table_name = table_name.lower()
-        
-        # Save the DataFrame to the SQLite database
-        self.data_raw.to_sql(table_name, conn, if_exists='replace', index=False)
-        
-        # Close the connection
-        conn.close()
-
-    @classmethod
-    def open_db(cls, db_path, city, state):
-        """
-        Open an SQLite database and return the connection object.
-
-        Parameters:
-            db_name (str): The name of the SQLite database file.
-
-        Returns:
-            sqlite3.Connection: The connection object to the SQLite database.
-        """
-        # Ensure the database name ends with .db
-        if not db_path.endswith('.db'):
-            db_path += '.db'
-        
-        # Create a connection to the SQLite database
-        conn = sqlite3.connect(db_path)
-
-        # Read data from the specified table
-        table_name = city + state
-        table_name = table_name.replace(' ', '_')
-        table_name = table_name.lower()
-        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-        conn.close()
-
-        rentcast_class = cls()
-        rentcast_class.data_raw = df
-        rentcast_class.process_data()
-        
-        return rentcast_class
+    #     return self.data_raw['city'].unique(
