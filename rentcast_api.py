@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import datetime
 import copy
 import requests
@@ -9,6 +10,13 @@ import sqlite3
 import os
 import scipy
 import json
+
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="Converting to PeriodArray/Index representation will drop timezone information.",
+    category=UserWarning,
+)
 
 class RentCastData():
 
@@ -351,24 +359,22 @@ class RentCastPlotter():
         return df
     
     def plot_city_states(self, city_states):
+        fig = go.Figure()
         for (city, state) in city_states:
-            self.plot_city(city, state, avg_only=True)
-            label = '%s, %s' % (city.title(), state.upper())
-            ax = plt.gca()
-            last_line = ax.lines[-1]
-            last_line.set_label(label)
-        plt.legend(loc='best')
+            self.plot_city(city, state, avg_only=True, fig=fig)
+        # plt.legend(loc='best')
+        fig.show()
     
-    def plot_city(self, city, state, avg_only=False):
+    def plot_city(self, city, state, avg_only=False, fig=None):
 
         self.read_city(city, state)
         df = self.data_processed[self._return_table_name(city, state)]
 
-        self.plot_processed_trace(df, avg_only=avg_only)
+        self.plot_processed_trace_ptly(df, avg_only=avg_only, fig=fig)
 
-        plt.title('Price per SQFT - %s, %s' % (city, state))
+        # plt.title('Price per SQFT - %s, %s' % (city, state))
 
-    def plot_processed_trace(self, df, filter_avg=True, avg_only=False):
+    def plot_processed_trace_mpl(self, df, filter_avg=True, avg_only=False):
 
         x = df['months'].values / 12
         y = df['price_per_sqft'].values
@@ -408,6 +414,103 @@ class RentCastPlotter():
         plt.xlabel('Time')
         plt.grid(True)
 
+
+    def plot_processed_trace_ptly(self, df, filter_avg=True, avg_only=False, fig=None):
+        """
+        Plot price_per_sqft vs lastSaleDate using Plotly with a date x-axis.
+        - If avg_only=False: plots all samples (scatter) + monthly average (line).
+        - If avg_only=True: adds only the monthly average; pass an existing `fig` to overlay.
+        - If `fig` is None, a new Figure is created and returned.
+        """
+        # ---- Labels / title ----
+        city = str(df["city"].iloc[0]).title()
+        state = str(df["state"].iloc[0]).upper()
+        if not avg_only:
+            label = "Average"
+            title = f"Price per SQFT - {city}, {state}"
+        else:
+            label = f"{city}, {state}"
+            title = "Price per SQFT"
+
+        # ---- Parse dates, clean data ----
+        dt = pd.to_datetime(df["lastSaleDate"], utc=True, errors="coerce")
+        y_all = pd.to_numeric(df["price_per_sqft"], errors="coerce")
+        mask = dt.notna() & y_all.notna()
+        dt = dt[mask]
+        y_all = y_all[mask]
+
+        # ---- Monthly average (calendar months) ----
+        g = (
+            pd.DataFrame({"dt": dt, "pps": y_all})
+            .groupby(dt.dt.to_period("M"))["pps"]
+            .mean()
+        )
+        x_avg = g.index.to_timestamp()  # start of month
+        y_avg = g.values
+
+        if filter_avg and len(y_avg) > 0:
+            # optional spike suppression (same length)
+            y_avg = self.despike_median(y_avg, window=8)
+
+        # ---- Figure (reuse or create) ----
+        created_here = False
+        if fig is None:
+            fig = go.Figure()
+            created_here = True
+
+        # Raw samples
+        if not avg_only:
+            fig.add_trace(go.Scattergl(
+                x=dt,
+                y=y_all,
+                mode="markers",
+                marker=dict(size=4, opacity=0.2),
+                name="Samples",
+                showlegend=False,
+            ))
+
+        # Average line
+        fig.add_trace(go.Scatter(
+            x=x_avg,
+            y=y_avg,
+            mode="lines",
+            line=dict(width=2 if avg_only else 1, color="black" if not avg_only else None),
+            name=label,
+        ))
+
+        # ---- Axes / layout ----
+        y_ticks = [10, 30, 100, 300, 1000]
+        fig.update_layout(
+            width=1000,
+            height=400,
+            title=title,
+            template="plotly_white",
+            yaxis=dict(
+                title="Price per SQFT ($)",
+                type="log",
+                range=[np.log10(50), np.log10(2000)],  # matches [50, 2000]
+                tickmode="array",
+                tickvals=y_ticks,
+                ticktext=[str(v) for v in y_ticks],
+                showgrid=True,
+            ),
+            xaxis=dict(
+                title="Time",
+                type="date",
+                tickformat="%m/%Y",       # month/year labels
+                dtick="M24",              # every 24 months = every 2 years
+                tickangle=45,             # tilt labels 45 deg
+                showgrid=True,
+            ),
+            margin=dict(l=60, r=20, t=60, b=80),
+        )
+
+        # If we created the fig here and the caller didn’t pass one, show it (only for full plot)
+        if created_here and not avg_only:
+            fig.show()
+
+        return fig
+
     def despike_median(self, x, window=5):
         """
         Replace x with median-filtered version.
@@ -415,7 +518,14 @@ class RentCastPlotter():
         """
         if window % 2 == 0:
             window += 1
-        return scipy.signal.medfilt(x, kernel_size=window)
+        pad = window // 2
+        # reflect padding at both ends
+        x_padded = np.pad(x, pad, mode="reflect")
+        # sliding median
+        return np.array([
+            np.median(x_padded[i:i+window]) 
+            for i in range(len(x))
+        ])
 
 
     # @classmethod
