@@ -358,7 +358,7 @@ class RentCastPlotter():
 
         return df
     
-    def plot_city_states(self, city_states):
+    def plot_city_states(self, city_states, filters=None):
         """
         Plot a collection of city-states with optional monthly average filtering and overlaying onto an existing figure.
 
@@ -369,11 +369,11 @@ class RentCastPlotter():
         """
         fig = go.Figure()
         for (city, state) in city_states:
-            self.plot_city_state(city, state, avg_only=True, fig=fig)
+            self.plot_city_state(city, state, avg_only=True, fig=fig, filters=filters)
         # plt.legend(loc='best')
         fig.show()
     
-    def plot_city_state(self, city, state, avg_only=False, fig=None):
+    def plot_city_state(self, city, state, avg_only=False, fig=None, filters=None):
 
         """
         Plot a city-state with optional monthly average filtering and overlaying onto an existing figure.
@@ -397,9 +397,37 @@ class RentCastPlotter():
         self.read_city(city, state)
         df = self.data_processed[self._return_table_name(city, state)]
 
+        df = self.apply_filters(df, filters) 
+
         self.plot_processed_trace_ptly(df, avg_only=avg_only, fig=fig)
 
         # plt.title('Price per SQFT - %s, %s' % (city, state))
+
+    def apply_filters(self, df, filters=None):
+        """
+        Apply a list of filters to a DataFrame.
+        Each filter should be a tuple (column, op, value).
+        Supported ops: '>', '<', '>=', '<=', '==', '!='
+        """
+        if filters is None:
+            return df
+
+        for col, op, val in filters:
+            if op == ">":
+                df = df[df[col] > val]
+            elif op == "<":
+                df = df[df[col] < val]
+            elif op == ">=":
+                df = df[df[col] >= val]
+            elif op == "<=":
+                df = df[df[col] <= val]
+            elif op == "==":
+                df = df[df[col] == val]
+            elif op == "!=":
+                df = df[df[col] != val]
+            else:
+                raise ValueError(f"Unsupported operator: {op}")
+        return df
 
     def plot_processed_trace_mpl(self, df, filter_avg=True, avg_only=False):
 
