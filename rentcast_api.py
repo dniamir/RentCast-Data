@@ -361,11 +361,11 @@ class RentCastPlotter():
     def plot_city_states(self, city_states):
         fig = go.Figure()
         for (city, state) in city_states:
-            self.plot_city(city, state, avg_only=True, fig=fig)
+            self.plot_city_state(city, state, avg_only=True, fig=fig)
         # plt.legend(loc='best')
         fig.show()
     
-    def plot_city(self, city, state, avg_only=False, fig=None):
+    def plot_city_state(self, city, state, avg_only=False, fig=None):
 
         self.read_city(city, state)
         df = self.data_processed[self._return_table_name(city, state)]
