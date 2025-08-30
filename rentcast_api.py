@@ -7,7 +7,7 @@ import copy
 import requests
 import sqlite3
 import os
-from sqlalchemy import JSON
+import scipy
 import json
 
 class RentCastData():
@@ -337,14 +337,10 @@ class RentCastPlotter():
         # If t0 is naive, make it UTC to match
         t0 = pd.Timestamp("1985-01-01", tz="UTC")
 
-        # Option A: month difference by calendar months (ignores day-of-month)
-        # months = (t0.to_period("M") - dt.dt.to_period("M")).astype("int")
-
-        # # Option B: month difference with day adjustment (subtract 1 if dt's day > t0's day)
+        # Calculate delta
         year_delta = (dt.dt.year - t0.year) * 12
         month_delta = dt.dt.month - t0.month
-        day_delta = (dt.dt.day > t0.day).astype(int)
-        months = year_delta +month_delta
+        months = year_delta + month_delta
 
         df = df.assign(
             datetime=dt,
@@ -354,16 +350,25 @@ class RentCastPlotter():
 
         return df
     
-    def plot_city(self, city, state):
+    def plot_city_states(self, city_states):
+        for (city, state) in city_states:
+            self.plot_city(city, state, avg_only=True)
+            label = '%s, %s' % (city.title(), state.upper())
+            ax = plt.gca()
+            last_line = ax.lines[-1]
+            last_line.set_label(label)
+        plt.legend(loc='best')
+    
+    def plot_city(self, city, state, avg_only=False):
 
         self.read_city(city, state)
         df = self.data_processed[self._return_table_name(city, state)]
 
-        self.plot_processed_trace(df)
+        self.plot_processed_trace(df, avg_only=avg_only)
 
         plt.title('Price per SQFT - %s, %s' % (city, state))
 
-    def plot_processed_trace(self, df):
+    def plot_processed_trace(self, df, filter_avg=True, avg_only=False):
 
         x = df['months'].values / 12
         y = df['price_per_sqft'].values
@@ -372,11 +377,20 @@ class RentCastPlotter():
         grouped_df = df.groupby('months')['price_per_sqft'].mean().reset_index()
         x_avg = grouped_df['months'].values / 12
         y_avg = grouped_df['price_per_sqft'].values
+        if filter_avg:
+            y_avg = self.despike_median(y_avg, 8)
 
-        # y_average = df.average
-        plt.figure(figsize=(10, 4))
-        plt.semilogy(x, y, lw=0, ms=2, marker='o', alpha=0.2)
-        plt.semilogy(x_avg, y_avg, lw=1, ms=0, marker='o', color='black', alpha=0.8)
+        if avg_only:
+            avg_color = None
+            avg_lw = 2
+        else:
+            avg_color = 'black'
+            avg_lw = 1
+
+        if not avg_only:
+            plt.figure(figsize=(10, 4))
+            plt.semilogy(x, y, lw=0, ms=2, marker='o', alpha=0.2)
+        plt.semilogy(x_avg, y_avg, lw=avg_lw, ms=0, marker='o', color=avg_color, alpha=0.8)
         plt.ylim([50, 2000])
 
         # x labels
@@ -393,6 +407,15 @@ class RentCastPlotter():
         plt.ylabel('Price per SQFT ($)')
         plt.xlabel('Time')
         plt.grid(True)
+
+    def despike_median(self, x, window=5):
+        """
+        Replace x with median-filtered version.
+        window must be odd; bigger -> more smoothing (and more spike suppression).
+        """
+        if window % 2 == 0:
+            window += 1
+        return scipy.signal.medfilt(x, kernel_size=window)
 
 
     # @classmethod
