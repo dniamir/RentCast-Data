@@ -1,6 +1,7 @@
 """Rent Cast API Python Helper Classes"""
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 import datetime
 import copy
 import requests
@@ -157,7 +158,7 @@ class RentCastData():
             table_name = table_name.lower()
         
         # Save the DataFrame to the SQLite database
-        df.to_sql(table_name, conn, if_exists='replace', index=False, method='multi')
+        df.to_sql(table_name, conn, if_exists='replace', index=False, method='multi', chunksize=30)
         
         # Close the connection
         conn.close()
@@ -181,10 +182,12 @@ class RentCastData():
 class RentCastPlotter():
 
     def __init__(self):
-        pass
+        self.conn = False
+        self.data_raw = {}
+        self.data_processed = {}
 
     @classmethod
-    def open_db(cls, db_path, city, state):
+    def open_db(cls, db_path):
         """
         Open an SQLite database and return the connection object.
 
@@ -199,20 +202,66 @@ class RentCastPlotter():
             db_path += '.db'
         
         # Create a connection to the SQLite database
-        conn = sqlite3.connect(db_path)
+        rcp = cls()
+        rcp.conn = sqlite3.connect(db_path)
 
-        # Read data from the specified table
+        return rcp
+    
+    def _return_table_name(self, city, state):
+        """
+        Return a table name given a city and state.
+
+        The table name is formed by concatenating the city and state, separated by an underscore.
+        Spaces are replaced with underscores and the entire string is converted to lowercase.
+
+        Parameters:
+            city (str): The city (e.g. "San Francisco").
+            state (str): The state (e.g. "CA").
+
+        Returns:
+            str: The table name (e.g. "san_francisco_ca").
+        """
         table_name = city + '_' +  state
         table_name = table_name.replace(' ', '_')
         table_name = table_name.lower()
-        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-        conn.close()
+        return table_name
+    
+    def list_all_cities(self):
+        """
+        List all cities in the database.
 
-        rentcast_class = cls()
-        rentcast_class.data_raw = df
-        rentcast_class.process_data()
-        
-        return rentcast_class
+        This method executes a SQL query to find all tables in the database,
+        which correspond to cities. The list of table names is then printed
+        to the console.
+
+        Returns:
+            None
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        print([t[0] for t in tables])  # list of table names
+                
+    def read_city(self, city, state):
+
+        # Read data from the specified table
+        """
+        Read the data for a given city and state from the SQLite database.
+
+        Parameters:
+            city (str): The city (e.g. "San Francisco").
+            state (str): The state (e.g. "CA").
+
+        Returns:
+            None
+        """
+        table_name = self._return_table_name(city, state)
+        df = pd.read_sql_query(f"SELECT * FROM {table_name}", self.conn)
+
+        # Get data and process it
+        self.data_raw[table_name] = df
+        if table_name not in list(self.data_processed):
+            self.data_processed[table_name] = self.process_data(df)
     
     def add_months(self, date, months):
         # Calculate the target month and year
@@ -261,19 +310,23 @@ class RentCastPlotter():
         
         return total_months
 
-    def process_data(self):
+    def process_data(self, df):
         """Add metrics of interest to the dataset"""
 
-        df = copy.deepcopy(self.data_raw)
-        df = df.dropna(subset=['lastSalePrice', 'squareFootage', 'lastSaleDate'])
+        df_temp = copy.deepcopy(df)
+
+        for col in ["lastSalePrice", "squareFootage"]:
+            df_temp[col] = pd.to_numeric(df_temp[col], errors="coerce")
+
+        df_temp = df_temp.dropna(subset=['lastSalePrice', 'squareFootage', 'lastSaleDate'])
 
         # Price per Square Foot
-        df['price_per_sqft'] =  df['lastSalePrice'] / df['squareFootage']
+        df_temp['price_per_sqft'] = df_temp['lastSalePrice'] / df_temp['squareFootage']
 
         # Duration on market
-        df = self.parse_sale_date(df)
+        df_temp = self.parse_sale_date(df_temp)
 
-        self.data_processed = df
+        return df_temp
 
     def parse_sale_date(self, df):
         """Parse last sale date into more readable terms"""
@@ -288,6 +341,47 @@ class RentCastPlotter():
             df.loc[index, 'datetime'] = dt
 
         return df
+    
+    def plot_city(self, city, state):
+
+        self.read_city(city, state)
+        df = self.data_processed[self._return_table_name(city, state)]
+
+        self.plot_processed_trace(df)
+
+        plt.title('Price per SQFT - %s, %s' % (city, state))
+
+    def plot_processed_trace(self, df):
+
+        x = df['months'].values / 12
+        y = df['price_per_sqft'].values
+
+        # Averages    
+        grouped_df = df.groupby('months')['price_per_sqft'].mean().reset_index()
+        x_avg = grouped_df['months'].values / 12
+        y_avg = grouped_df['price_per_sqft'].values
+
+        # y_average = df.average
+        plt.figure(figsize=(10, 4))
+        plt.semilogy(x, y, lw=0, ms=2, marker='o', alpha=0.2)
+        plt.semilogy(x_avg, y_avg, lw=1, ms=0, marker='o', color='black', alpha=0.8)
+        plt.ylim([50, 2000])
+
+        # x labels
+        int_labels = np.arange(0, 42, 2.5)
+        n = len(int_labels)
+        lsd = df['lastSaleDate'].values[0]
+        dt = datetime.datetime.strptime(lsd, '%Y-%m-%dT%H:%M:%S.%fZ')
+        dt_labels = [self.add_months(dt, x * 30) for x in range(n)]
+        dt_labels = [dt_label.strftime('%m/%Y') for dt_label in dt_labels]
+        plt.xticks(int_labels, dt_labels, rotation=45)
+        plt.yticks([10, 30, 100, 300, 1000], [10, 30, 100, 300, 1000])
+
+        plt.title('Price per SQFT - Redwood City')
+        plt.ylabel('Price per SQFT ($)')
+        plt.xlabel('Time')
+        plt.grid(True)
+
 
     # @classmethod
     # def retrun_all_cities(cls, dp_path):
