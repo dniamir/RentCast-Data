@@ -359,6 +359,14 @@ class RentCastPlotter():
         return df
     
     def plot_city_states(self, city_states):
+        """
+        Plot a collection of city-states with optional monthly average filtering and overlaying onto an existing figure.
+
+        Parameters
+        ----------
+        city_states : list of tuples
+            List of tuples containing the city and state (e.g. ('San Francisco', 'CA')).
+        """
         fig = go.Figure()
         for (city, state) in city_states:
             self.plot_city_state(city, state, avg_only=True, fig=fig)
@@ -367,6 +375,25 @@ class RentCastPlotter():
     
     def plot_city_state(self, city, state, avg_only=False, fig=None):
 
+        """
+        Plot a city-state with optional monthly average filtering and overlaying onto an existing figure.
+
+        Parameters
+        ----------
+        city : str
+            The city (e.g. "San Francisco").
+        state : str
+            The state (e.g. "CA").
+        avg_only : bool, optional
+            If True, only plot the monthly average; if False, plot all samples and monthly average.
+            Default is False.
+        fig : go.Figure, optional
+            If not None, overlay onto this figure; otherwise create a new figure.
+
+        Returns
+        -------
+        None
+        """
         self.read_city(city, state)
         df = self.data_processed[self._return_table_name(city, state)]
 
@@ -376,6 +403,13 @@ class RentCastPlotter():
 
     def plot_processed_trace_mpl(self, df, filter_avg=True, avg_only=False):
 
+        """
+        Plot a time series of price per sqft for a city and state.
+        The raw data points are plotted as semi-transparent points.
+        The average is plotted as a line. If `filter_avg` is True, the
+        average is preprocessed to remove spikes.
+        If `avg_only` is True, only the average is plotted.
+        """
         x = df['months'].values / 12
         y = df['price_per_sqft'].values
 
