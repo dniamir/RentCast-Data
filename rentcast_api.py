@@ -331,14 +331,26 @@ class RentCastPlotter():
     def parse_sale_date(self, df):
         """Parse last sale date into more readable terms"""
 
-        # Get duration in months
-        df.sort_values('lastSaleDate', inplace=True)
-        t0 = datetime.datetime.strptime(df['lastSaleDate'].values[0], '%Y-%m-%dT%H:%M:%S.%fZ')
-        for index, row in df.iterrows():
-            dt = datetime.datetime.strptime(row['lastSaleDate'], '%Y-%m-%dT%H:%M:%S.%fZ')
-            df.loc[index, 'months'] = self._months_between(dt, t0)
-            df.loc[index, 'month-year'] = dt.strftime('%m-%Y')
-            df.loc[index, 'datetime'] = dt
+        # Parse once, vectorized
+        dt = pd.to_datetime(df["lastSaleDate"], utc=True, errors="coerce")
+
+        # If t0 is naive, make it UTC to match
+        t0 = pd.Timestamp("1985-01-01", tz="UTC")
+
+        # Option A: month difference by calendar months (ignores day-of-month)
+        # months = (t0.to_period("M") - dt.dt.to_period("M")).astype("int")
+
+        # # Option B: month difference with day adjustment (subtract 1 if dt's day > t0's day)
+        year_delta = (dt.dt.year - t0.year) * 12
+        month_delta = dt.dt.month - t0.month
+        day_delta = (dt.dt.day > t0.day).astype(int)
+        months = year_delta +month_delta
+
+        df = df.assign(
+            datetime=dt,
+            **{"month-year": dt.dt.strftime("%m-%Y")},
+            months=months
+        )
 
         return df
     
