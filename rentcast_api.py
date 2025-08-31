@@ -215,6 +215,19 @@ class RentCastPlotter():
 
         return rcp
     
+    @property
+    def data_all(self):
+        """Concatenate all city DataFrames into one DataFrame."""
+        dfs = []
+        for city_state in self.list_all_cities():
+
+            self.read_city(city_state=city_state)
+            df_copy = copy.deepcopy(self.data_processed[city_state])
+            df_copy["city_key"] = city_state  # track source city
+            dfs.append(df_copy)
+
+        return pd.concat(dfs, ignore_index=True)
+    
     def _return_table_name(self, city, state):
         """
         Return a table name given a city and state.
@@ -248,9 +261,9 @@ class RentCastPlotter():
         cursor = self.conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         tables = cursor.fetchall()
-        print([t[0] for t in tables])  # list of table names
+        return [t[0] for t in tables]  # list of table names
                 
-    def read_city(self, city, state):
+    def read_city(self, city=None, state=None, city_state=None):
 
         # Read data from the specified table
         """
@@ -263,12 +276,17 @@ class RentCastPlotter():
         Returns:
             None
         """
-        table_name = self._return_table_name(city, state)
-        df = pd.read_sql_query(f"SELECT * FROM {table_name}", self.conn)
+        if city_state is None:
+            table_name = self._return_table_name(city, state)
+        else:
+            table_name = city_state
 
-        # Get data and process it
-        self.data_raw[table_name] = df
         if table_name not in list(self.data_processed):
+
+            df = pd.read_sql_query(f"SELECT * FROM {table_name}", self.conn)
+
+            # Get data and process it
+            self.data_raw[table_name] = df
             self.data_processed[table_name] = self.process_data(df)
     
     def add_months(self, date, months):
