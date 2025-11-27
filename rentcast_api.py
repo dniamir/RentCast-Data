@@ -843,7 +843,7 @@ class RentCastPredictor():
         return df_predict.loc[idx, ['city', 'month-year', 'bedrooms', 'bathrooms', 'squareFootage', 'yearBuilt', 'pred_price_k', 'act_price_k', 'error_k', 'per_error']]
 
 
-    def predict(self, df=None, plot=False):
+    def predict(self, df=None, plot=False, manual_transform=False):
         """
         Predict the price of a property.
         """
@@ -857,9 +857,10 @@ class RentCastPredictor():
         pred_log = self.model.predict(x_one)
         pred_price = np.expm1(pred_log).astype(float)
 
-        # Manual empiracl linear transformation
-        # pred_price = (pred_price - 0) / (1 - 800e3 / 2000e3) 
-        # pred_price = (pred_price) * 1.2 - 80e3
+        # Manual empiracle linear transformation
+        if manual_transform:
+            # pred_price = (pred_price - 0) / (1 - 800e3 / 2000e3) 
+            pred_price = (pred_price) * 1.2 - 80e3
 
         act_price = df.loc[:, 'lastSalePrice'].values
         error = pred_price - act_price
