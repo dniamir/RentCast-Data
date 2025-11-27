@@ -858,7 +858,8 @@ class RentCastPredictor():
         pred_price = np.expm1(pred_log).astype(float)
 
         # Manual empiracl linear transformation
-        # pred_price = pred_price + df.loc[:, 'squareFootage'] * 
+        # pred_price = (pred_price - 0) / (1 - 800e3 / 2000e3) 
+        # pred_price = (pred_price) * 1.2 - 80e3
 
         act_price = df.loc[:, 'lastSalePrice'].values
         error = pred_price - act_price
@@ -874,12 +875,10 @@ class RentCastPredictor():
         df.loc[:, 'error_k'] = error_k
         df.loc[:, 'per_error'] = per_error
 
-        self.df_predict = df
-
         if plot:
 
             n = pred_price_k.shape[0]
-            alpha = (35510449 - 49 * n) / 35510400
+            # alpha = (35510449 - 49 * n) / 35510400
 
             plt.plot(np.array(pred_price_k), np.array(act_price_k), lw=0, ms=4, mec='black', alpha=0.002, marker='o')
             plt.grid(True)
@@ -900,5 +899,6 @@ class RentCastPredictor():
             plt.xlabel('Predicted Cost [$1k]')
             plt.title('Predicted vs Actual Cost')
 
-
+        self.df_predict = df
         return self.df_predict
+
