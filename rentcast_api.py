@@ -902,3 +902,107 @@ class RentCastPredictor():
         self.df_predict = df
         return self.df_predict
 
+    def plot_residuals(self, per=False):
+
+        df_predict = self.df_predict
+        error = df_predict['per_error'].values if per else df_predict['error_k'].values
+            
+        important_cols = []
+        # important_cols = ['months', 'squareFootage', 'sale_year', 'yearsOld', 'lastSalePrice', 'geo_cluster']
+        important_cols += self.feature_cols
+        important_cols += ['lastSalePrice']
+
+        plt.figure(figsize=(12, 12))
+
+        for idx, important_col in enumerate(important_cols):
+
+            col_data = df_predict.loc[:, important_col].values
+
+            if important_col == 'lastSalePrice':
+                col_data = col_data / 1e3
+
+            plt.subplot(4, 3, idx+1)
+            plt.plot(col_data, error, lw=0, ms=4, marker='o', mec='black', alpha=0.002)
+            plt.xlabel(important_col)
+            plt.grid()
+            if per:
+                plt.title('Error [%%] vs %s' % important_col)
+                plt.ylim([-200, 200])
+            else:
+                plt.title('Error [$1k] vs %s' % important_col)
+
+        plt.tight_layout()
+
+    def plot_binned_residuals(self, bins=20, strategy="quantile"):
+        """
+        Plots mean residual per bin with a shaded 10–90% band.
+        """
+        
+        df = self.df_predict
+
+        plt.figure(figsize=(12, 12))
+
+        important_cols = []
+        important_cols += self.num_cols
+        important_cols += ['lastSalePrice']
+
+        # Loop over all features
+        for idx, col in enumerate(important_cols):
+
+            # Get stats
+            error = df['error_k'].values
+            col_data = df[col].values
+            stats = self.binned_residual_stats(col_data, error, bins=bins, strategy=strategy)
+
+            x_mid = stats["x_mid"]
+            err_mean = stats["err_mean"]
+            err_p10 = stats["err_p10"]
+            err_p90 = stats["err_p90"]
+
+            # Plot
+            plt.subplot(4, 3, idx+1)
+
+            plt.axhline(0, ls="--", lw=1, color="gray")
+            plt.fill_between(x_mid, err_p10, err_p90, alpha=0.2, edgecolor="none")
+            plt.plot(x_mid, err_mean, marker="o", lw=2, mec='black')
+            plt.xlabel(col)
+            plt.ylabel("Mean error")
+            plt.title(col)
+            plt.ylim([-300, 300])
+            plt.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+    def binned_residual_stats(self, x, err, bins=20, strategy="quantile"):
+        """
+        x: 1D array-like feature
+        err: 1D array-like residuals (e.g., (pred - actual)/actual*100 or pred-actual)
+        bins: number of bins
+        strategy: "quantile" (equal-count bins) or "uniform" (equal-width bins)
+        Returns: DataFrame with bin centers, mean, p10, p90, count
+        """
+        x = pd.Series(x).astype(float)
+        err = pd.Series(err).astype(float)
+
+        if strategy == "quantile":
+            # quantile bins handle skewed features better
+            q = np.linspace(0, 1, bins + 1)
+            edges = x.quantile(q).values
+            # ensure strictly increasing (dedup if constant segments)
+            edges = np.unique(edges)
+            if len(edges) < 3:  # too few unique edges
+                edges = np.linspace(x.min(), x.max(), min(bins, 10) + 1)
+            cats = pd.cut(x, bins=edges, include_lowest=True)
+        else:
+            cats = pd.cut(x, bins=bins)
+
+        g = pd.DataFrame({"x": x, "err": err, "bin": cats}).dropna().groupby("bin", observed=False)
+        stats = g.agg(
+            x_mid=("x", lambda s: (s.min() + s.max()) / 2.0),
+            err_mean=("err", "mean"),
+            err_p10=("err", lambda s: np.percentile(s, 10)),
+            err_p90=("err", lambda s: np.percentile(s, 90)),
+            count=("err", "size"),
+        ).reset_index(drop=True)
+
+        return stats.sort_values("x_mid")
