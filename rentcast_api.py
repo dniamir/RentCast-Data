@@ -11,6 +11,14 @@ import os
 import scipy
 import json
 
+from sklearn.cluster import KMeans
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
+
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -639,3 +647,253 @@ class RentCastPlotter():
     #     """Return a list of all unique cities in the dataset"""
 
     #     return self.data_raw['city'].unique(
+
+
+class RentCastPredictor():
+
+    DEFAULT_NUM_COLS = ['bedrooms', 'bathrooms', 'months', 'log_sqft', 'log_lotSize', 'yearsOld', 'log_cluster_time_median']
+    DEFAULT_CAT_COLS = ["city", "geo_cluster", 'sale_month']
+    # DEFAULT_CAT_COLS = ["city"]
+    DEFAULT_TARGET_COL = 'log_lastSalePrice'
+
+    def __init__(self, df_raw, num_columns=None, cat_columns=None, target_col=None, random_state=None):
+        df_raw = copy.deepcopy(df_raw)
+        df_raw.reset_index(drop=True, inplace=True)
+
+        self.random_state = np.random.randint(0, 100) if random_state is None else random_state
+
+        # Model columns
+        self.num_cols = self.DEFAULT_NUM_COLS if num_columns is None else num_columns
+        self.cat_cols = self.DEFAULT_CAT_COLS if cat_columns is None else cat_columns
+        self.target_col = self.DEFAULT_TARGET_COL if target_col is None else target_col
+        self.derived_cols = []
+
+        # Data
+        self.df_raw = df_raw
+        self.df_filtered = None
+        self.df_derived = None
+        self.df_normalized = None
+        self.df_clean = None
+        self.df_predict = None
+        self.model = None
+
+
+        # Pre-process the data
+        self.filter_properties()
+        self.derive_features()
+        self.normalize_data()
+
+    @property
+    def feature_cols(self):
+        return self.num_cols + self.cat_cols + [self.target_col]
+
+    def filter_properties(self):
+        """
+        Filter out properties that are not in the list of cities.
+        """
+        df = copy.deepcopy(self.df_raw)
+
+        # Drop rows missing data needed for prediction
+        feature_cols = [self.target_col] + self.num_cols + self.cat_cols
+        for col in feature_cols:
+            if col in list(df):
+                df = df.dropna(subset=col)
+
+        # Filter out properties that are not in the list of cities.
+        df = df[
+            (df["lastSalePrice"] < 2_000_000) &
+            (df["bedrooms"].between(1, 8)) &
+            (df["bathrooms"].between(1, 8)) &
+            (df["squareFootage"].between(500, 6000)) &
+            (df["lotSize"].between(500, 25_000)) &
+            (df["yearBuilt"].between(1850, 2025)) &
+            (df["lastSalePrice"] / df["squareFootage"] < 2000) & 
+            (df["lastSalePrice"] / df["squareFootage"] > 30)
+        ]
+
+        self.df_filtered = df
+
+
+    def derive_features(self):
+        """
+        Derive features from the raw data.
+        """
+        df = copy.deepcopy(self.df_filtered)
+        
+        # Derive sale month and sale year and ensure they are integers
+        df[["sale_month" ,"sale_year"]] = df["month-year"].str.split("-", expand=True)
+        df['sale_year'] = df['sale_year'].astype(int)
+        df["sale_month"] = df["sale_month"].astype(int)
+        # self.num_cols += ['sale_month', 'sale_year']
+
+        # Derive geo cluster
+        coords = df[["latitude","longitude"]]
+        df["geo_cluster"] = KMeans(n_clusters=50, random_state=42).fit_predict(coords)
+        cluster_means = df.groupby("geo_cluster")["lastSalePrice"].median()
+        # self.cat_cols += ['geo_cluster']
+
+        # Log last sale price
+        df['log_lastSalePrice'] = np.log1p(df['lastSalePrice'].values) 
+
+        # Median price of the geo_cluster per month
+        for cluster_id, group in df.groupby("geo_cluster"):
+            X_temp = group[["months"]].values
+            y_temp = group["log_lastSalePrice"].values
+
+            # simple linear fit
+            temp_model = LinearRegression()
+            temp_model.fit(X_temp, y_temp)
+
+            # predict for this group's rows
+            df.loc[group.index, "log_cluster_time_median"] = temp_model.predict(X_temp)
+
+        # self.num_cols += ['log_cluster_time_median']
+        self.df_derived = df
+
+    def normalize_data(self):
+
+        df = copy.deepcopy(self.df_derived)
+    
+        df['log_lotSize'] = np.log(df['lotSize'].values)
+
+        df['log_sqft'] = np.log(df['squareFootage'].values)
+
+        df['lot_sqft_per_sqft'] = np.log(df['lotSize'].values / df['squareFootage'].values)
+
+        df['log_sqFt_per_bedroom'] = np.log(df['squareFootage'].values) / df['bedrooms'].values
+
+        df['log_sqFt_per_bathroom'] = np.log(df['squareFootage'].values) / df['bathrooms'].values
+
+        df['yearsOld'] = 2025 - df['yearBuilt'].values
+
+        self.df_normalized = df
+
+    def setup_model(self):
+        """
+        Setup the model.
+        """
+        num_transformer = StandardScaler()
+        cat_transformer = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+        transformers = [
+            ("num", num_transformer, self.num_cols),
+            ("cat", cat_transformer, self.cat_cols)
+        ]
+
+        preprocessor = ColumnTransformer(transformers)
+    
+        hgb = HistGradientBoostingRegressor(
+            max_iter=400, 
+            learning_rate=0.01, 
+            max_depth=10,
+            early_stopping=True,
+            random_state=self.random_state
+        )
+
+        model = Pipeline(steps=[
+            ("preprocessor", preprocessor),
+            ("regressor", hgb)
+        ])
+
+        # Chose dataset
+        if self.df_normalized is not None:
+            self.df_clean = self.df_normalized
+        elif self.df_derived is not None:
+            self.df_clean = self.df_derived
+        elif self.df_filtered is not None:
+            self.df_clean = self.df_filtered
+        else:
+            self.df_clean = self.df_raw
+
+        self.model = model
+
+    def train_model_and_eval(self):
+
+        # Input and output vars
+        X = self.df_clean[self.num_cols + self.cat_cols]
+        y = self.df_clean[self.target_col]
+
+        # Train/test split
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=self.random_state)
+
+        # Fit
+        self.model.fit(X_train, y_train)
+
+        # Cross-validation score
+        rmse = cross_val_score(self.model, X_train, y_train, cv=5, scoring="neg_root_mean_squared_error")
+        rmse = -np.mean(rmse)
+        rsq = self.model.score(X_test, y_test) * 100  # R^2
+        print("CV RMSE:", round(rmse, 2), ", Test R²:", round(rsq, 1))
+
+        return rmse, rsq
+
+    def check_one(self, n=1):
+
+        # pick a row by index (from the same schema as training)
+        i = np.random.randint(0, self.df_clean.shape[0], n)
+        idx = self.df_clean.index[i]
+        df_predict = self.predict(self.df_clean.loc[idx, :], plot=False)
+
+        pred_price = df_predict.loc[idx, 'pred_price_k']
+        act_price = df_predict.loc[idx, 'act_price_k']
+        per_error = df_predict.loc[idx, 'per_error']
+        
+        if n == 1:
+            print("Predicted - Actual - %% Error --- $%i - $%i - %.1f%%" % (pred_price.values[0], act_price.values[0], per_error.values[0]))
+        return df_predict.loc[idx, ['city', 'month-year', 'bedrooms', 'bathrooms', 'squareFootage', 'yearBuilt', 'pred_price_k', 'act_price_k', 'per_error']]
+
+
+    def predict(self, df=None, plot=False):
+        """
+        Predict the price of a property.
+        """
+
+        if df is None:
+            df = copy.deepcopy(self.df_clean)
+
+        feature_cols = self.num_cols + self.cat_cols + [self.target_col]
+        x_one = df.loc[:, feature_cols]
+
+        pred_log = self.model.predict(x_one)
+        pred_price = np.expm1(pred_log).astype(float)
+
+        # Manual empiracl linear transformation
+        # pred_price = pred_price + df.loc[:, 'squareFootage'] * 
+
+        act_price = df.loc[:, 'lastSalePrice'].values
+        per_error = (pred_price - act_price) / act_price * 100
+
+        pred_price_k = np.round(pred_price / 1e3)
+        act_price_k = np.round(act_price / 1e3)
+        per_error = np.round(per_error, 1)
+        
+        df.loc[:, 'pred_price_k'] = pred_price_k
+        df.loc[:, 'act_price_k'] = act_price_k
+        df.loc[:, 'per_error'] = per_error
+
+        self.df_predict = df
+
+        if plot:
+
+            n = pred_price_k.shape[0]
+            alpha = (35510449 - 49 * n) / 35510400
+
+            plt.plot(np.array(pred_price_k), np.array(act_price_k), lw=0, ms=4, mec='black', alpha=0.002, marker='o')
+            plt.grid(True)
+
+            ax = plt.gca()
+            # get limits
+            lims = [
+                min(ax.get_xlim()[0], ax.get_ylim()[0]),
+                max(ax.get_xlim()[1], ax.get_ylim()[1]),
+            ]
+
+            # plot 1:1 line
+            ax.plot(lims, lims, 'k--', alpha=1)  # black dashed line
+            ax.set_xlim(lims)
+            ax.set_ylim(lims)
+
+            plt.ylabel('Actual Cost [$1k]')
+            plt.xlabel('Predicted Cost [$1k]')
+
+
+        return self.df_predict
