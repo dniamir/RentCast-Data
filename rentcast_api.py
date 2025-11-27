@@ -189,6 +189,11 @@ class RentCastData():
 
 class RentCastPlotter():
 
+    BASE_FILTERS = [
+            ("price_per_sqft", ">", 100),
+            ("price_per_sqft", "<", 5000),
+        ]
+
     def __init__(self):
         self.conn = False
         self.data_raw = {}
@@ -417,9 +422,22 @@ class RentCastPlotter():
 
         df = self.apply_filters(df, filters) 
 
-        self.plot_processed_trace_ptly(df, avg_only=avg_only, fig=fig)
+        fig = self.plot_processed_trace_ptly(df, avg_only=avg_only, fig=fig)
 
-        # plt.title('Price per SQFT - %s, %s' % (city, state))
+        return fig
+
+    # def plot_city_state(self, city, state, avg_only=False, fig=None, filter1,=None):
+
+    #     """
+    #     """
+    #     self.read_city(city, state)
+    #     df = self.data_processed[self._return_table_name(city, state)]
+
+    #     df = self.apply_filters(df, filters) 
+
+    #     self.plot_processed_trace_ptly(df, avg_only=avg_only, fig=fig)
+
+    #     # plt.title('Price per SQFT - %s, %s' % (city, state))
 
     def apply_filters(self, df, filters=None):
         """
@@ -428,7 +446,10 @@ class RentCastPlotter():
         Supported ops: '>', '<', '>=', '<=', '==', '!='
         """
         if filters is None:
-            return df
+            filters = []
+
+        # Add base filters    
+        filters += self.BASE_FILTERS
 
         for col, op, val in filters:
             if op == ">":
@@ -558,8 +579,13 @@ class RentCastPlotter():
             name=label,
         ))
 
+        # Choose y-axis ticks
+        max_y = max(y_avg)
+        y_ticks = np.logspace(np.log10(10), np.log10(max_y * 1.5), 12)
+        y_ticks = [int(np.floor(y / 10) * 10) for y in y_ticks]
+
+
         # ---- Axes / layout ----
-        y_ticks = [10, 30, 100, 300, 1000]
         fig.update_layout(
             width=1000,
             height=400,
