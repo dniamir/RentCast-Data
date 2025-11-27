@@ -18,6 +18,8 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
+from sklearn.metrics import mean_squared_error
+
 
 import warnings
 warnings.filterwarnings(
@@ -901,6 +903,14 @@ class RentCastPredictor():
             plt.title('Predicted vs Actual Cost')
 
         self.df_predict = df
+
+        # Print RSME and PCT Error
+        rmse = np.sqrt(mean_squared_error(act_price / 1e3, pred_price / 1e3))
+        pct_err = np.abs(act_price - pred_price) / act_price * 100
+        pct_err = np.round(pct_err.mean(), 1)
+        print("RMSE --- %i" % rmse)
+        print("PCT Error --- %.1f%%" % pct_err) 
+
         return self.df_predict
 
     def plot_residuals(self, per=False):
