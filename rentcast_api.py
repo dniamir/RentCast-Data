@@ -833,13 +833,14 @@ class RentCastPredictor():
         idx = self.df_clean.index[i]
         df_predict = self.predict(self.df_clean.loc[idx, :], plot=False)
 
-        pred_price = df_predict.loc[idx, 'pred_price_k']
-        act_price = df_predict.loc[idx, 'act_price_k']
-        per_error = df_predict.loc[idx, 'per_error']
+        pred_price_k = df_predict.loc[idx, 'pred_price_k'].values[0]
+        act_price_k = df_predict.loc[idx, 'act_price_k'].values[0]
+        error_k = df_predict.loc[idx, 'error_k'].values[0]
+        per_error = df_predict.loc[idx, 'per_error'].values[0]
         
         if n == 1:
-            print("Predicted - Actual - %% Error --- $%i - $%i - %.1f%%" % (pred_price.values[0], act_price.values[0], per_error.values[0]))
-        return df_predict.loc[idx, ['city', 'month-year', 'bedrooms', 'bathrooms', 'squareFootage', 'yearBuilt', 'pred_price_k', 'act_price_k', 'per_error']]
+            print("Predicted - Actual - Error - %% Error --- $%i - $%i - %i - %.1f%%" % (pred_price_k, act_price_k, error_k, per_error))
+        return df_predict.loc[idx, ['city', 'month-year', 'bedrooms', 'bathrooms', 'squareFootage', 'yearBuilt', 'pred_price_k', 'act_price_k', 'error_k', 'per_error']]
 
 
     def predict(self, df=None, plot=False):
@@ -860,14 +861,17 @@ class RentCastPredictor():
         # pred_price = pred_price + df.loc[:, 'squareFootage'] * 
 
         act_price = df.loc[:, 'lastSalePrice'].values
+        error = pred_price - act_price
         per_error = (pred_price - act_price) / act_price * 100
 
         pred_price_k = np.round(pred_price / 1e3)
         act_price_k = np.round(act_price / 1e3)
+        error_k = np.round(error / 1e3)
         per_error = np.round(per_error, 1)
         
         df.loc[:, 'pred_price_k'] = pred_price_k
         df.loc[:, 'act_price_k'] = act_price_k
+        df.loc[:, 'error_k'] = error_k
         df.loc[:, 'per_error'] = per_error
 
         self.df_predict = df
@@ -894,6 +898,7 @@ class RentCastPredictor():
 
             plt.ylabel('Actual Cost [$1k]')
             plt.xlabel('Predicted Cost [$1k]')
+            plt.title('Predicted vs Actual Cost')
 
 
         return self.df_predict
