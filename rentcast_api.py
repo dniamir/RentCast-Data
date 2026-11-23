@@ -654,7 +654,7 @@ class RentCastPlotter():
 class RentCastPredictor():
 
     DEFAULT_NUM_COLS = ['bedrooms', 'bathrooms', 'months', 'log_sqft', 'log_lotSize', 'yearsOld', 'log_cluster_time_median']
-    DEFAULT_CAT_COLS = ["city", "geo_cluster", 'sale_month']
+    DEFAULT_CAT_COLS = ["city", "geo_cluster"]
     # DEFAULT_CAT_COLS = ["city"]
     DEFAULT_TARGET_COL = 'log_lastSalePrice'
 
@@ -678,7 +678,6 @@ class RentCastPredictor():
         self.df_clean = None
         self.df_predict = None
         self.model = None
-
 
         # Pre-process the data
         self.filter_properties()
@@ -726,13 +725,17 @@ class RentCastPredictor():
         df[["sale_month" ,"sale_year"]] = df["month-year"].str.split("-", expand=True)
         df['sale_year'] = df['sale_year'].astype(int)
         df["sale_month"] = df["sale_month"].astype(int)
-        # self.num_cols += ['sale_month', 'sale_year']
+
+        # One hot encoded months
+        dummies = pd.get_dummies(df["sale_month"], prefix="m")
+        df = pd.concat([df, dummies], axis=1)
+        month_cols = [c for c in df.columns if c.startswith("m_")]
+        self.num_cols += month_cols
 
         # Derive geo cluster
         coords = df[["latitude","longitude"]]
         df["geo_cluster"] = KMeans(n_clusters=50, random_state=42).fit_predict(coords)
         cluster_means = df.groupby("geo_cluster")["lastSalePrice"].median()
-        # self.cat_cols += ['geo_cluster']
 
         # Log last sale price
         df['log_lastSalePrice'] = np.log1p(df['lastSalePrice'].values) 
@@ -927,6 +930,10 @@ class RentCastPredictor():
 
         for idx, important_col in enumerate(important_cols):
 
+            # Don't include month cols
+            if important_col.startswith("m_"):
+                continue
+
             col_data = df_predict.loc[:, important_col].values
 
             if important_col == 'lastSalePrice':
@@ -959,6 +966,10 @@ class RentCastPredictor():
 
         # Loop over all features
         for idx, col in enumerate(important_cols):
+
+            # Don't include month cols
+            if important_col.startswith("m_"):
+                continue
 
             # Get stats
             error = df['error_k'].values
